@@ -8,39 +8,49 @@ import string
 import nltk
 import os
 import kagglehub
+
+# NLTK Imports (Import DownloadError directly to fix the AttributeError)
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+from nltk.downloader import DownloadError 
+
+# Scikit-learn Imports
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.decomposition import LatentDirichletAllocation, NMF
+
+# Transformers Import
 from transformers import pipeline
+
+# --- Initial Setup and Global Variables ---
 
 # Set Streamlit page configuration
 st.set_page_config(layout="wide", page_title="Dynamic Text Analysis Platform")
 
-# --- Initial Setup and Global Variables ---
+# --- NLTK Data Download Function (FIXED) ---
 
-# Download necessary NLTK data (if not already downloaded)
-@st.cache_resource
+# Removed @st.cache_resource to avoid conflicts with NLTK's global state
 def download_nltk_data():
     """Download necessary NLTK data."""
+    # Use the directly imported DownloadError to handle exceptions
     try:
         nltk.data.find('corpora/stopwords')
-    except nltk.downloader.DownloadError:
+    except DownloadError:
         nltk.download('stopwords', quiet=True)
     try:
         nltk.data.find('corpora/wordnet')
-    except nltk.downloader.DownloadError:
+    except DownloadError:
         nltk.download('wordnet', quiet=True)
     try:
         nltk.data.find('taggers/averaged_perceptron_tagger')
-    except nltk.downloader.DownloadError:
+    except DownloadError:
         nltk.download('averaged_perceptron_tagger', quiet=True)
     try:
         nltk.data.find('tokenizers/punkt')
-    except nltk.downloader.DownloadError:
+    except DownloadError:
         nltk.download('punkt', quiet=True)
 
+# Run NLTK download once at startup
 download_nltk_data()
 
 # Define preprocessing components
@@ -59,7 +69,7 @@ def clean_text(text):
     words = [lemmatizer.lemmatize(word) for word in words]
     return ' '.join(words)
 
-# Define topic names (as in the original code)
+# Define topic names
 lda_topic_names = [
     "Daily Greetings and Wishes", "Social Interaction", "Low Urgency/Feedback", "Call to Action",
     "High Urgency/Crisis:", "Work/Professional Life:", "Personal Life/Relationships:",
@@ -92,10 +102,9 @@ def load_data_and_train_models():
         file_path = os.path.join(path, 'train.csv')
         df = pd.read_csv(file_path, encoding='latin-1')
 
-        # Handle missing values and sample for speed
+        # Handle missing values and sample for speed (important for Streamlit Cloud)
         df.dropna(subset=['text', 'selected_text', 'sentiment'], inplace=True)
-        # Sample the data to ensure fast app loading, especially for initial deployment
-        # You can remove this line for full dataset analysis in a dedicated environment
+        # Sample the data to ensure fast app loading
         df = df.sample(n=5000, random_state=42).reset_index(drop=True)
 
         # Apply cleaning to the text column
@@ -130,17 +139,14 @@ def load_data_and_train_models():
 df, tfidf_vectorizer, logreg, lda, nmf, tfidf_matrix, lda_matrix, nmf_matrix, summarization_pipeline = load_data_and_train_models()
 
 
-# --- Analysis and Summarization Functions (Copied/Adapted from your script) ---
+# --- Analysis and Summarization Functions ---
 
 def analyze_text(raw_text):
     """Analyzes the sentiment and topics of a given raw text."""
     if df.empty or tfidf_vectorizer is None or logreg is None or lda is None or nmf is None:
         return "N/A (Models not loaded)", None, None
 
-    # Preprocess the input text
     cleaned_text = clean_text(raw_text)
-
-    # Transform the cleaned text
     user_tfidf_matrix = tfidf_vectorizer.transform([cleaned_text])
 
     # Predict sentiment
@@ -163,16 +169,11 @@ def summarize_texts_by_topic_sentiment(topic_name, sentiment, topic_threshold=0.
 
     # Prepare combined DataFrame for filtering
     temp_df = df.copy()
-    lda_df_temp = pd.DataFrame(lda_matrix, columns=lda_topic_names, index=temp_df.index)
-
-    # Handle NMF column names for potential duplicates before concatenation
-    nmf_df_temp_cols = nmf_topic_names[:]
-    nmf_df_temp = pd.DataFrame(nmf_matrix, columns=nmf_df_temp_cols, index=temp_df.index)
-
-    # A simpler approach for the web app is to assume topic names are unique enough
-    # and just use the NMF names directly, or rename for safety as in the original code:
+    lda_df_temp = pd.DataFrame(lda_matrix, columns=lda_topic_names)
+    
+    # Rename NMF columns for unique identification
     nmf_cols_safe = [f"{col}_NMF" for col in nmf_topic_names]
-    nmf_df_temp.columns = nmf_cols_safe
+    nmf_df_temp = pd.DataFrame(nmf_matrix, columns=nmf_cols_safe)
 
     # Re-align indexes before concatenation
     temp_df = temp_df.reset_index(drop=True)
@@ -215,7 +216,7 @@ def summarize_texts_by_topic_sentiment(topic_name, sentiment, topic_threshold=0.
 
     return summarized_results
 
-# --- Visualization Functions (Adapted for Streamlit) ---
+# --- Visualization and Recommendation Functions ---
 
 def get_sentiment_distribution_df():
     """Calculates the mean topic distribution by sentiment for heatmaps."""
@@ -224,12 +225,15 @@ def get_sentiment_distribution_df():
 
     # Prepare combined DataFrame for calculations
     lda_df_temp = pd.DataFrame(lda_matrix, columns=lda_topic_names)
+    
+    # Rename NMF columns back to original names for heatmap display
     nmf_df_temp = pd.DataFrame(nmf_matrix, columns=[f"{col}_NMF" for col in nmf_topic_names])
 
     combined_df = pd.concat([df.reset_index(drop=True), lda_df_temp, nmf_df_temp], axis=1)
 
     lda_sentiment_distribution = combined_df.groupby('sentiment')[lda_topic_names].mean()
-    # Remove the "_NMF" suffix for better display in the heatmap
+    
+    # Recalculate NMF sentiment distribution and rename columns for display
     nmf_sentiment_distribution = combined_df.groupby('sentiment')[nmf_df_temp.columns].mean()
     nmf_sentiment_distribution.columns = nmf_topic_names
 
@@ -252,6 +256,7 @@ def plot_topic_sentiment_heatmap(sentiment_distribution_df, title):
     if sentiment_distribution_df is None or sentiment_distribution_df.empty:
         return None
     fig, ax = plt.subplots(figsize=(12, 6))
+    # Ensure all topics are used as columns
     sns.heatmap(sentiment_distribution_df, annot=True, fmt=".2f", cmap="YlGnBu", ax=ax)
     ax.set_title(title)
     ax.set_xlabel('Topics')
@@ -264,6 +269,7 @@ def generate_wordcloud(topic_components, feature_names, topic_name, no_top_words
     """Generates a word cloud for a given topic."""
     if topic_components is None or feature_names is None:
         return None
+    # Use features names from the vectorizer
     top_words_dict = {feature_names[i]: topic_components[i] for i in topic_components.argsort()[:-no_top_words - 1:-1]}
     wordcloud = WordCloud(width=800, height=400, background_color='white').generate_from_frequencies(top_words_dict)
 
@@ -273,26 +279,25 @@ def generate_wordcloud(topic_components, feature_names, topic_name, no_top_words
     ax.set_title(f"Topic: {topic_name}")
     return fig
 
-# --- Recommendation Engine Logic (Simple Example) ---
-
 def get_actionable_recommendation(sentiment, lda_topics, nmf_topics):
     """Provides actionable insights based on analysis."""
     recommendation = ""
-    high_urgency_topic_lda = lda_topics.get("High Urgency/Crisis:", 0)
-    high_urgency_topic_nmf = nmf_topics.get("High Urgency/Crisis:", 0)
+    # Use LDA for primary topic check for simplicity in demonstration
+    high_urgency_topic = lda_topics.get("High Urgency/Crisis:", 0)
+    product_mention_topic = lda_topics.get("Product/Service Mention:", 0)
 
     if sentiment == 'negative':
         recommendation += "🚨 **Immediate Action Recommended:** Negative sentiment detected. "
-        if high_urgency_topic_lda > 0.3 or high_urgency_topic_nmf > 0.3:
+        if high_urgency_topic > 0.3:
             recommendation += "High Urgency/Crisis topic is dominant. **Prioritize immediate investigation** and response to mitigate potential damage. Use the summarization tool to extract key complaints. "
-        elif lda_topics.get("Product/Service Mention:", 0) > 0.3 or nmf_topics.get("Product/Service Mention:", 0) > 0.3:
+        elif product_mention_topic > 0.3:
             recommendation += "Focus on **specific product/service complaints**. Initiate a deeper root cause analysis on this area. "
         else:
             recommendation += "Consider a **deeper dive into 'General Commentary/Venting'** to identify underlying issues before they escalate. "
 
     elif sentiment == 'positive':
         recommendation += "✅ **Strategy Recommendation:** Positive sentiment detected. "
-        if lda_topics.get("Social Interaction", 0) > 0.3 or nmf_topics.get("Social Interaction", 0) > 0.3:
+        if lda_topics.get("Social Interaction", 0) > 0.3:
             recommendation += "Identify and **amplify positive social interactions** as testimonials or success stories. "
         else:
             recommendation += "**Benchmark successful processes** associated with the highest contributing topic to replicate success. "
@@ -341,7 +346,7 @@ with tab1:
                     st.metric(label="Predicted Sentiment", value=sentiment.upper())
 
                 # --- Actionable Insights/Recommendation Engine ---
-                with st.expander("⭐ Actionable Recommendation (Insight Engine)"):
+                with st.expander("⭐ Actionable Recommendation (Insight Engine)", expanded=True):
                     recommendation = get_actionable_recommendation(sentiment, lda_topics if lda_topics else {}, nmf_topics if nmf_topics else {})
                     st.info(recommendation)
 
@@ -371,15 +376,16 @@ with tab2:
     st.header("Batch Summarization by Topic & Sentiment")
     st.markdown("Generate concise summaries of texts from the dataset that match a specific **Topic** and **Sentiment** criteria.")
 
-    if summarization_pipeline is None:
-        st.error("Summarization pipeline failed to load. Please check installation of `transformers` and available models.")
-    elif df.empty:
-        st.warning("Dataset not loaded. Summarization is disabled.")
+    if summarization_pipeline is None or df.empty:
+        st.warning("Summarization is disabled due to missing data or pipeline failure.")
     else:
+        # Create a combined list of unique topic names for the select box
+        all_topics = list(set(lda_topic_names + nmf_topic_names))
+        
         col_select, col_slider = st.columns([1, 1])
 
         with col_select:
-            summary_topic = st.selectbox("🎯 Select Topic for Summarization:", lda_topic_names + [name for name in nmf_topic_names if name not in lda_topic_names], key="summary_topic")
+            summary_topic = st.selectbox("🎯 Select Topic for Summarization:", all_topics, key="summary_topic")
             summary_sentiment = st.selectbox("😊 Select Target Sentiment:", ['negative', 'neutral', 'positive'], key="summary_sentiment")
 
         with col_slider:
@@ -410,7 +416,8 @@ with tab3:
         # 1. Overall Sentiment Distribution
         st.subheader("1. Overall Sentiment Distribution")
         sentiment_fig = plot_sentiment_distribution(df['sentiment'])
-        st.pyplot(sentiment_fig)
+        if sentiment_fig:
+            st.pyplot(sentiment_fig)
         st.markdown("---")
 
         lda_dist, nmf_dist = get_sentiment_distribution_df()
@@ -422,12 +429,14 @@ with tab3:
         with col_lda:
             st.markdown("#### LDA Topic Distribution")
             lda_heatmap = plot_topic_sentiment_heatmap(lda_dist, 'Mean LDA Topic Distribution by Sentiment')
-            st.pyplot(lda_heatmap)
+            if lda_heatmap:
+                st.pyplot(lda_heatmap)
 
         with col_nmf:
             st.markdown("#### NMF Topic Distribution")
             nmf_heatmap = plot_topic_sentiment_heatmap(nmf_dist, 'Mean NMF Topic Distribution by Sentiment')
-            st.pyplot(nmf_heatmap)
+            if nmf_heatmap:
+                st.pyplot(nmf_heatmap)
         st.markdown("---")
 
         # 3. Topic Word Clouds
@@ -440,9 +449,11 @@ with tab3:
             wc_topic_name = st.selectbox("Select LDA Topic to Visualize:", lda_topic_names, key="wc_lda_select")
             topic_idx = lda_topic_names.index(wc_topic_name)
             wc_fig = generate_wordcloud(lda.components_[topic_idx], tfidf_feature_names, wc_topic_name)
-            st.pyplot(wc_fig)
+            if wc_fig:
+                st.pyplot(wc_fig)
         else: # NMF
             wc_topic_name = st.selectbox("Select NMF Topic to Visualize:", nmf_topic_names, key="wc_nmf_select")
             topic_idx = nmf_topic_names.index(wc_topic_name)
             wc_fig = generate_wordcloud(nmf.components_[topic_idx], tfidf_feature_names, wc_topic_name)
-            st.pyplot(wc_fig)
+            if wc_fig:
+                st.pyplot(wc_fig)
