@@ -1,5 +1,11 @@
-streamlit
-nltk
-scikit-learn
+streamlit>=1.0.0
 pandas
 numpy
+nltk
+scikit-learn
+transformers
+torch
+matplotlib
+seaborn
+wordcloud
+kagglehub
