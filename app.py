@@ -9,10 +9,18 @@ import nltk
 import os
 import kagglehub
 
-# NLTK Imports (Import DownloadError directly to fix the AttributeError)
+# NLTK Imports
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
-from nltk.downloader import DownloadError 
+
+# FIX for ImportError: Dynamically access DownloadError to ensure compatibility
+try:
+    from nltk.downloader import DownloadError
+except ImportError:
+    # Fallback for environments (like some Streamlit Cloud setups) where 
+    # the direct submodule import fails, but nltk.downloader is available.
+    DownloadError = getattr(nltk.downloader, 'DownloadError', Exception)
+
 
 # Scikit-learn Imports
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -29,10 +37,9 @@ st.set_page_config(layout="wide", page_title="Dynamic Text Analysis Platform")
 
 # --- NLTK Data Download Function (FIXED) ---
 
-# Removed @st.cache_resource to avoid conflicts with NLTK's global state
 def download_nltk_data():
     """Download necessary NLTK data."""
-    # Use the directly imported DownloadError to handle exceptions
+    # Use the robustly imported DownloadError to handle exceptions
     try:
         nltk.data.find('corpora/stopwords')
     except DownloadError:
@@ -226,7 +233,7 @@ def get_sentiment_distribution_df():
     # Prepare combined DataFrame for calculations
     lda_df_temp = pd.DataFrame(lda_matrix, columns=lda_topic_names)
     
-    # Rename NMF columns back to original names for heatmap display
+    # Rename NMF columns for unique identification and then rename back for display
     nmf_df_temp = pd.DataFrame(nmf_matrix, columns=[f"{col}_NMF" for col in nmf_topic_names])
 
     combined_df = pd.concat([df.reset_index(drop=True), lda_df_temp, nmf_df_temp], axis=1)
@@ -256,7 +263,6 @@ def plot_topic_sentiment_heatmap(sentiment_distribution_df, title):
     if sentiment_distribution_df is None or sentiment_distribution_df.empty:
         return None
     fig, ax = plt.subplots(figsize=(12, 6))
-    # Ensure all topics are used as columns
     sns.heatmap(sentiment_distribution_df, annot=True, fmt=".2f", cmap="YlGnBu", ax=ax)
     ax.set_title(title)
     ax.set_xlabel('Topics')
